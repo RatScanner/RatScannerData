@@ -1,0 +1,26 @@
+name: Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - '*'
+  pull_request:
+    tags:
+      - '*'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v2
+    - name: Zip Content
+      run: 7z a -r -xr'!.*' Data.zip ./*
+    - name: Draft Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: Data.zip
+        draft: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
