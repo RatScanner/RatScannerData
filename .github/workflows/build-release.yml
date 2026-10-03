@@ -103,14 +103,15 @@ jobs:
         if: steps.content.outputs.changed == 'true' && env.RELEASE_MODE != 'validate'
         env:
           GH_TOKEN: ${{ github.token }}
-          CONTENT_SHA: ${{ steps.content.outputs.sha }}
         shell: bash
         run: |
           set -euo pipefail
 
-          release_date="$(date -u +%Y%m%d)"
-          tag="data-${CONTENT_SHA:0:16}"
-          title="RatScanner data ${release_date}"
+          # Releases are named for the day they were cut, matching the history this
+          # repository used before the bundle was automated. At most one release is
+          # drafted per day, so the date is unique and doubles as the tag.
+          tag="$(date -u +%Y%m%d)"
+          title="$tag"
 
           if existing_draft="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" \
               --json isDraft --jq '.isDraft' 2>/dev/null)"; then

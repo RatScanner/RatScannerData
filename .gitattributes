@@ -1,0 +1,15 @@
+# Normalise line endings in the repository. The local core.autocrlf setting varies
+# by machine, so pin it here instead: everything is stored with LF, and only
+# Windows working copies get CRLF. Without this, a Windows checkout rewrites files
+# to CRLF and every diff shows the whole file as changed.
+* text=auto eol=lf
+
+# The bundle payload and images are binary; never touch them.
+*.png binary
+*.jpg binary
+*.webp binary
+*.traineddata binary
+*.zip binary
+
+# Keep the generated bundle out of diffs even if someone builds locally.
+/build/ export-ignore
