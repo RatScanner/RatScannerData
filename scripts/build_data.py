@@ -2,9 +2,11 @@
 """Build the deterministic RatScanner Data.zip release payload.
 
 Item icons, OCR models, map metadata and the unknown-item placeholder are fetched
-from their upstream sources on every run. The interactive map SVGs and the per-map
-banner art have no stable public upstream endpoint, so they are copied forward from
-the tracked `maps/` and `banner/` folders in this repository.
+from their upstream sources on every run. Map SVGs are driven by maps.json: each
+interactive entry's `svgPath` is downloaded for the map id that artwork belongs to.
+Artwork maps.json references but upstream does not serve, and the per-map banner
+art (which has no upstream endpoint at all), are copied forward from the tracked
+`maps/` and `banner/` folders in this repository.
 """
 
 from __future__ import annotations
@@ -28,23 +30,38 @@ from collections import Counter
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
+from xml.etree import ElementTree
 
 from PIL import Image, UnidentifiedImageError
 
+SVG_NAMESPACE = "http://www.w3.org/2000/svg"
+
 CATALOG_URL = "https://json.tarkov.dev/regular/items"
-MAPS_URL = "https://raw.githubusercontent.com/the-hideout/tarkov-dev/main/src/data/maps.json"
-TARKOV_DEV_LICENSE_URL = "https://raw.githubusercontent.com/the-hideout/tarkov-dev/main/LICENSE"
+MAP_CATALOG_URL = "https://json.tarkov.dev/regular/maps"
+MAPS_URL = (
+    "https://raw.githubusercontent.com/the-hideout/tarkov-dev/main/src/data/maps.json"
+)
+TARKOV_DEV_LICENSE_URL = (
+    "https://raw.githubusercontent.com/the-hideout/tarkov-dev/main/LICENSE"
+)
 TESSDATA_REF = "4.1.0"
-TESSDATA_BASE_URL = f"https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/{TESSDATA_REF}"
+TESSDATA_BASE_URL = (
+    f"https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/{TESSDATA_REF}"
+)
 TESSDATA_LICENSE_URL = f"{TESSDATA_BASE_URL}/LICENSE"
 UNKNOWN_IMAGE_URL = "https://assets.tarkov.dev/unknown-item-base-image.webp"
-USER_AGENT = "RatScannerDataBuilder/1.0 (+https://github.com/TarkovTracker-org/RatScannerData)"
+USER_AGENT = (
+    "RatScannerDataBuilder/1.0 (+https://github.com/TarkovTracker-org/RatScannerData)"
+)
 
 SAFE_ITEM_ID = re.compile(r"^[A-Za-z0-9_-]+$")
 # Map ids are 24-character hex strings; both carried folders are keyed by them.
 SAFE_MAP_ID = re.compile(r"^[0-9a-f]{24}$")
 DEFAULT_BANNER = "default.png"
 
+# Map ids are opaque strings upstream, but every id observed is Mongo ObjectId-shaped.
+# The pattern guards the archive entry path built from it, not the id itself.
+MIN_PREFIX_LENGTH = 4
 REQUIRED_ARCHIVE_FILES = (
     "maps.json",
     "unknown.png",
@@ -53,6 +70,9 @@ REQUIRED_ARCHIVE_FILES = (
     "manifest.json",
     "THIRD_PARTY_NOTICES.md",
 )
+# Map artwork that maps.json does not reference, or that upstream does not serve,
+# must still reach the client, so a bundle with too few SVGs is treated as a failure.
+MINIMUM_MAP_SVGS = 8
 
 # RatScanner addresses OCR models by ISO-639-3 code. Tesseract names Simplified
 # Chinese "chi_sim"; the rest line up directly.
@@ -109,7 +129,9 @@ def fetch_bytes(
                 raise
             retry_after = error.headers.get("Retry-After")
             delay = (
-                float(retry_after) if retry_after and retry_after.isdigit() else 2 ** (attempt - 1)
+                float(retry_after)
+                if retry_after and retry_after.isdigit()
+                else 2 ** (attempt - 1)
             )
         except (TimeoutError, urllib.error.URLError):
             if attempt == attempts:
@@ -134,7 +156,9 @@ def parse_json(content: bytes, source: str) -> Any:
         raise ValueError(f"Invalid JSON from {source}") from error
 
 
-def load_catalog(catalog_url: str) -> tuple[list[dict[str, Any]], list[dict[str, str]], bytes]:
+def load_catalog(
+    catalog_url: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, str]], bytes]:
     content = fetch_bytes(catalog_url, accept="application/json")
     document = parse_json(content, catalog_url)
     raw_items = document.get("data", {}).get("items")
@@ -158,7 +182,9 @@ def load_catalog(catalog_url: str) -> tuple[list[dict[str, Any]], list[dict[str,
             raise ValueError(f"Item {item_id} has no baseImageLink")
         image_host = urllib.parse.urlparse(image_url).hostname
         if image_host != "assets.tarkov.dev":
-            raise ValueError(f"Item {item_id} has an unexpected image host: {image_host}")
+            raise ValueError(
+                f"Item {item_id} has an unexpected image host: {image_host}"
+            )
 
         seen_ids.add(item_id)
         if image_url == UNKNOWN_IMAGE_URL:
@@ -298,7 +324,9 @@ def install_icons(
     return entries
 
 
-def install_maps(data_directory: Path) -> dict[str, Any]:
+def install_maps(data_directory: Path) -> tuple[dict[str, Any], list[Any]]:
+    """Download and validate maps.json, returning it for SVG target resolution."""
+
     content = fetch_bytes(MAPS_URL, accept="application/json")
     document = parse_json(content, MAPS_URL)
     if not isinstance(document, list) or not document:
@@ -311,12 +339,13 @@ def install_maps(data_directory: Path) -> dict[str, Any]:
         if not isinstance(map_group.get("maps"), list):
             raise ValueError("maps.json entry is missing maps")
     write_bytes_atomic(data_directory / "maps.json", content)
-    return {
+    entry = {
         "path": "maps.json",
         "sha256": sha256_bytes(content),
         "size": len(content),
         "source": MAPS_URL,
     }
+    return entry, document
 
 
 def install_unknown_icon(data_directory: Path) -> dict[str, Any]:
@@ -342,7 +371,9 @@ def install_ocr_models(data_directory: Path, workers: int) -> list[dict[str, Any
         content = fetch_bytes(source_url)
         if len(content) < 100_000:
             raise ValueError(f"OCR model is unexpectedly small: {source_url}")
-        write_bytes_atomic(traineddata_directory / f"{output_code}.traineddata", content)
+        write_bytes_atomic(
+            traineddata_directory / f"{output_code}.traineddata", content
+        )
         return {
             "path": f"traineddata/{output_code}.traineddata",
             "sha256": sha256_bytes(content),
@@ -364,54 +395,329 @@ def install_ocr_models(data_directory: Path, workers: int) -> list[dict[str, Any
     return entries
 
 
-def install_carried_folder(
-    data_directory: Path,
-    repository_root: Path,
-    folder: str,
-    suffix: str,
-) -> list[dict[str, Any]]:
-    """Copy a tracked asset folder into the bundle.
+def load_map_catalog() -> dict[str, dict[str, Any]]:
+    """normalizedName -> map id, from the tarkov.dev map catalog."""
 
-    `maps/` and `banner/` have no stable public upstream endpoint, so their files
-    are carried forward verbatim. Names are validated because they end up as
-    archive entry paths, and the tarkov.dev map ids they are keyed by must be
-    recognised before anything is written.
+    content = fetch_bytes(MAP_CATALOG_URL, accept="application/json")
+    document = parse_json(content, MAP_CATALOG_URL)
+    raw_maps = document.get("data", {}).get("maps")
+    if not isinstance(raw_maps, dict):
+        raise ValueError("Map catalog does not contain data.maps")
+
+    catalog: dict[str, dict[str, Any]] = {}
+    for map_id, raw_map in raw_maps.items():
+        if not isinstance(raw_map, dict):
+            continue
+        normalized_name = raw_map.get("normalizedName")
+        if isinstance(map_id, str) and isinstance(normalized_name, str):
+            catalog[normalized_name] = {"id": map_id, "name": raw_map.get("name")}
+
+    if not catalog:
+        raise ValueError("Map catalog is empty")
+    return catalog
+
+
+def resolve_map_ids(map_catalog: dict[str, dict[str, Any]]) -> dict[str, str]:
+    """Map a maps.json normalizedName to the map id(s) its artwork serves.
+
+    maps.json has one entry per artwork while the catalog has a separate map per
+    variant, so "ground-zero" is the artwork behind "ground-zero",
+    "ground-zero-21" and "ground-zero-tutorial". Exact matches win; otherwise the
+    shortest longer name sharing the prefix is used, mirroring how RatScanner
+    resolves maps at runtime.
     """
 
-    source_directory = repository_root / folder
-    if not source_directory.is_dir():
-        raise ValueError(f"Required tracked folder is missing: {folder}/")
+    resolved: dict[str, str] = {}
+    for normalized_name in map_catalog:
+        if normalized_name in map_catalog:
+            resolved[normalized_name] = map_catalog[normalized_name]["id"]
+            continue
+        candidates = [
+            name
+            for name in map_catalog
+            if name.startswith(normalized_name)
+            and len(normalized_name) >= MIN_PREFIX_LENGTH
+        ]
+        if candidates:
+            shortest = min(candidates, key=lambda name: (len(name), name))
+            resolved[normalized_name] = map_catalog[shortest]["id"]
+
+    return resolved
+
+
+def load_svg_targets(
+    maps_document: list[Any],
+    map_catalog: dict[str, dict[str, Any]],
+) -> list[dict[str, str]]:
+    """One download target per interactive maps.json entry that has an svgPath."""
+
+    resolved = resolve_map_ids(map_catalog)
+    targets: dict[str, dict[str, str]] = {}
+
+    for map_group in maps_document:
+        if not isinstance(map_group, dict):
+            raise ValueError("maps.json contains a non-object entry")
+        normalized_name = map_group.get("normalizedName")
+        if not isinstance(normalized_name, str):
+            raise ValueError("maps.json entry is missing normalizedName")
+        entries = map_group.get("maps")
+        if not isinstance(entries, list):
+            raise ValueError("maps.json entry is missing maps")
+
+        # Only the interactive projection carries SVG artwork; the 2D/3D entries
+        # are raster tile layers and duplicate the same svgPath when present.
+        svg_paths = {
+            entry.get("svgPath")
+            for entry in entries
+            if isinstance(entry, dict)
+            and entry.get("projection") == "interactive"
+            and isinstance(entry.get("svgPath"), str)
+        }
+        if not svg_paths:
+            continue
+
+        map_id = resolved.get(normalized_name)
+        if map_id is None or not SAFE_MAP_ID.fullmatch(map_id):
+            # An artwork with no resolvable map id has no destination filename.
+            print(f"  skipping {normalized_name}: no map id in the catalog", flush=True)
+            continue
+
+        for svg_path in sorted(svg_paths):
+            if map_id in targets:
+                # Several names can share one artwork; one copy is enough.
+                continue
+            targets[map_id] = {
+                "mapId": map_id,
+                "normalizedName": normalized_name,
+                "svgPath": svg_path,
+            }
+
+    return [targets[map_id] for map_id in sorted(targets)]
+
+
+def validate_svg(content: bytes, source: str) -> None:
+    """Check an SVG is parseable and carries a usable viewBox.
+
+    RatScanner's map viewer derives the canvas aspect ratio from the viewBox, and
+    the SVG is served to a WebView, so a malformed or unsized document would render
+    as an empty map. The bytes are stored exactly as upstream serves them: the file
+    is inlined into the page, so re-serializing it would rewrite namespace prefixes
+    and reformat the markup for no benefit.
+    """
+
+    try:
+        root = ElementTree.fromstring(content)
+    except ElementTree.ParseError as error:
+        raise ValueError(f"Could not parse SVG from {source}") from error
+
+    tag = root.tag
+    if tag != "svg" and tag != f"{{{SVG_NAMESPACE}}}svg":
+        raise ValueError(f"SVG from {source} has no root <svg> element")
+
+    view_box = root.get("viewBox")
+    if not view_box:
+        raise ValueError(f"SVG from {source} has no viewBox")
+    parts = view_box.split()
+    if len(parts) != 4:
+        raise ValueError(f"SVG from {source} has a malformed viewBox: {view_box}")
+    try:
+        view_width, view_height = float(parts[2]), float(parts[3])
+    except ValueError as error:
+        raise ValueError(
+            f"SVG from {source} has a non-numeric viewBox: {view_box}"
+        ) from error
+    if view_width <= 0 or view_height <= 0:
+        raise ValueError(f"SVG from {source} has an empty viewBox: {view_box}")
+
+
+def download_svg(target: dict[str, str], destination: Path) -> dict[str, Any]:
+    source_url = target["svgPath"]
+    parsed = urllib.parse.urlparse(source_url)
+    if parsed.scheme != "https" or parsed.hostname != "assets.tarkov.dev":
+        raise ValueError(
+            f"Unexpected SVG host for {target['normalizedName']}: {source_url}"
+        )
+
+    content = fetch_bytes(source_url, accept="image/svg+xml,image/*")
+    validate_svg(content, source_url)
+    relative_path = f"maps/{target['mapId']}.svg"
+    write_bytes_atomic(destination / relative_path, content)
+    return {
+        "path": relative_path,
+        "sha256": sha256_bytes(content),
+        "size": len(content),
+        "normalizedName": target["normalizedName"],
+        "source": source_url,
+    }
+
+
+def install_map_svgs(
+    data_directory: Path,
+    targets: list[dict[str, str]],
+    repository_root: Path,
+    workers: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    """Populate maps/{mapId}.svg from maps.json's svgPath values.
+
+    Artwork maps.json references but upstream does not serve is taken from the
+    tracked `maps/` folder instead, and any tracked file maps.json no longer
+    references is carried forward so maps RatScanner exposes by id do not
+    disappear from the bundle.
+    """
 
     entries: list[dict[str, Any]] = []
+
+    def download(target: dict[str, str]) -> dict[str, Any]:
+        return download_svg(target, data_directory)
+
+    failures: list[dict[str, str]] = []
+    if targets:
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=min(workers, len(targets))
+        ) as executor:
+            futures = {executor.submit(download, target): target for target in targets}
+            for future in concurrent.futures.as_completed(futures):
+                target = futures[future]
+                try:
+                    entries.append(future.result())
+                except (
+                    Exception
+                ) as error:  # noqa: BLE001 - fall back to the tracked copy
+                    failures.append(
+                        {
+                            "mapId": target["mapId"],
+                            "normalizedName": target["normalizedName"],
+                            "source": target["svgPath"],
+                            "reason": str(error),
+                        }
+                    )
+
+    entries.sort(key=lambda entry: entry["path"])
+
+    requested_ids = {target["mapId"] for target in targets}
+    fallback_entries, missing = carry_forward_svgs(
+        data_directory,
+        repository_root,
+        entries,
+        requested_ids,
+    )
+    entries.extend(fallback_entries)
+    entries.sort(key=lambda entry: entry["path"])
+
+    if len(entries) < MINIMUM_MAP_SVGS:
+        raise ValueError(
+            f"Only {len(entries)} map SVGs were produced; expected at least {MINIMUM_MAP_SVGS}. "
+            f"Download failures: {failures}; missing from maps/: {missing}"
+        )
+
+    return entries, failures + missing
+
+
+def carry_forward_svgs(
+    data_directory: Path,
+    repository_root: Path,
+    entries: list[dict[str, Any]],
+    requested_ids: set[str],
+) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    """Copy tracked maps/ files that were not fetched from upstream."""
+
+    source_directory = repository_root / "maps"
+    if not source_directory.is_dir():
+        return [], []
+
+    produced = {entry["path"] for entry in entries}
+    carried: list[dict[str, Any]] = []
+    skipped: list[dict[str, str]] = []
+
     for path in sorted(source_directory.iterdir()):
         if not path.is_file():
             continue
-        if path.suffix != suffix:
-            raise ValueError(f"Unexpected file in {folder}/: {path.name}")
+        if path.suffix != ".svg":
+            raise ValueError(f"Unexpected file in maps/: {path.name}")
+        if not SAFE_MAP_ID.fullmatch(path.stem):
+            raise ValueError(f"Unexpected name in maps/: {path.name}")
+
+        relative_path = f"maps/{path.name}"
+        if relative_path in produced:
+            continue
+
+        reason = (
+            "referenced by maps.json but upstream download failed"
+            if path.stem in requested_ids
+            else "not referenced by maps.json; carried forward for map ids RatScanner exposes"
+        )
+        content = path.read_bytes()
+        write_bytes_atomic(data_directory / relative_path, content)
+        carried.append(
+            {
+                "path": relative_path,
+                "sha256": sha256_bytes(content),
+                "size": len(content),
+                "source": f"repository/maps/{path.name}",
+                "carriedReason": reason,
+            }
+        )
+        skipped.append({"mapId": path.stem, "reason": reason, "source": relative_path})
+
+    return carried, skipped
+
+
+def install_banners(
+    data_directory: Path,
+    repository_root: Path,
+    map_ids: set[str],
+) -> list[dict[str, Any]]:
+    """Carry the banner art forward.
+
+    No endpoint publishes the per-map banner PNGs, so `banner/` stays tracked.
+    Every map id this build produced artwork for gets a banner when one is
+    tracked, which keeps the pairing with maps/ intact as maps.json changes.
+    """
+
+    source_directory = repository_root / "banner"
+    if not source_directory.is_dir():
+        raise ValueError("Required tracked folder is missing: banner/")
+
+    entries: list[dict[str, Any]] = []
+    default_stem = DEFAULT_BANNER.removesuffix(".png")
+    found_default = False
+
+    for path in sorted(source_directory.iterdir()):
+        if not path.is_file():
+            continue
+        if path.suffix != ".png":
+            raise ValueError(f"Unexpected file in banner/: {path.name}")
 
         stem = path.stem
-        if stem != DEFAULT_BANNER.removesuffix(".png") and not SAFE_MAP_ID.fullmatch(stem):
-            raise ValueError(f"Unexpected name in {folder}/: {path.name}")
+        if stem == default_stem:
+            found_default = True
+        elif not SAFE_MAP_ID.fullmatch(stem):
+            raise ValueError(f"Unexpected name in banner/: {path.name}")
+        elif stem not in map_ids:
+            # No artwork for this map in the bundle, so its banner has no consumer.
+            continue
 
         content = path.read_bytes()
-        relative_path = f"{folder}/{path.name}"
+        relative_path = f"banner/{path.name}"
         write_bytes_atomic(data_directory / relative_path, content)
         entries.append(
             {
                 "path": relative_path,
                 "sha256": sha256_bytes(content),
                 "size": len(content),
-                "source": f"repository/{folder}/{path.name}",
+                "source": f"repository/banner/{path.name}",
             }
         )
 
-    if folder == "banner" and not any(entry["path"].endswith(DEFAULT_BANNER) for entry in entries):
+    if not found_default:
         raise ValueError(f"banner/{DEFAULT_BANNER} is required")
 
     return entries
 
 
-def install_notices(data_directory: Path, repository_root: Path) -> list[dict[str, Any]]:
+def install_notices(
+    data_directory: Path, repository_root: Path
+) -> list[dict[str, Any]]:
     notice_source = repository_root / "THIRD_PARTY_NOTICES.md"
     notice_content = notice_source.read_bytes()
     write_bytes_atomic(data_directory / notice_source.name, notice_content)
@@ -467,6 +773,7 @@ def write_manifest(
     icon_entries: list[dict[str, Any]],
     other_entries: list[dict[str, Any]],
     carried_entries: list[dict[str, Any]],
+    map_notes: list[dict[str, str]],
     skipped_items: list[dict[str, str]],
 ) -> dict[str, Any]:
     content_entries = sorted(
@@ -476,7 +783,12 @@ def write_manifest(
     source_counts = Counter(entry["source"] for entry in icon_entries)
     # Counted by top-level folder so the manifest reports "maps" and "banner"
     # separately, independent of how each entry's source is spelled.
-    carried_counts = Counter(entry["path"].split("/", 1)[0] for entry in carried_entries)
+    carried_counts = Counter(
+        entry["path"].split("/", 1)[0] for entry in carried_entries
+    )
+    map_entries = [
+        entry for entry in carried_entries if entry["path"].startswith("maps/")
+    ]
     manifest = {
         "schemaVersion": 1,
         "contentSha256": content_digest(content_entries),
@@ -485,18 +797,29 @@ def write_manifest(
         "iconCount": len(icon_entries),
         "skippedItemCount": len(skipped_items),
         "uniqueIconSourceCount": len(source_counts),
-        "sharedIconSourceGroupCount": sum(count > 1 for count in source_counts.values()),
+        "sharedIconSourceGroupCount": sum(
+            count > 1 for count in source_counts.values()
+        ),
         "slotDimensionMismatchCount": sum(
             not entry["slotDimensionsMatch"] for entry in icon_entries
+        ),
+        "mapSvgCount": len(map_entries),
+        "mapSvgDownloadedCount": sum(
+            "carriedReason" not in entry for entry in map_entries
+        ),
+        "bannerCount": sum(
+            entry["path"].startswith("banner/") for entry in carried_entries
         ),
         "fileCount": len(content_entries),
         "sources": {
             "catalog": catalog_url,
+            "mapCatalog": MAP_CATALOG_URL,
             "maps": MAPS_URL,
             "unknownImage": UNKNOWN_IMAGE_URL,
             "ocr": f"{TESSDATA_BASE_URL}/",
         },
         "carriedFolders": dict(sorted(carried_counts.items())),
+        "mapNotes": map_notes,
         "skippedItems": skipped_items,
         "files": content_entries,
     }
@@ -530,6 +853,7 @@ def validate_output(
     data_directory: Path,
     archive_path: Path,
     expected_icon_count: int,
+    expected_map_svg_count: int,
 ) -> None:
     for relative_path in REQUIRED_ARCHIVE_FILES:
         if not (data_directory / relative_path).is_file():
@@ -537,7 +861,15 @@ def validate_output(
 
     icon_count = len(list((data_directory / "icons").glob("*.png")))
     if icon_count != expected_icon_count:
-        raise ValueError(f"Expected {expected_icon_count} icons but generated {icon_count}")
+        raise ValueError(
+            f"Expected {expected_icon_count} icons but generated {icon_count}"
+        )
+
+    map_svg_count = len(list((data_directory / "maps").glob("*.svg")))
+    if map_svg_count != expected_map_svg_count:
+        raise ValueError(
+            f"Expected {expected_map_svg_count} map SVGs but produced {map_svg_count}"
+        )
 
     with zipfile.ZipFile(archive_path, "r") as archive:
         invalid_file = archive.testzip()
@@ -555,6 +887,14 @@ def validate_output(
                 "Archive icon count does not match generated icon count: "
                 f"{archived_icon_count} != {expected_icon_count}"
             )
+        archived_map_count = sum(
+            name.startswith("maps/") and name.endswith(".svg") for name in names
+        )
+        if archived_map_count != expected_map_svg_count:
+            raise ValueError(
+                "Archive map SVG count does not match generated count: "
+                f"{archived_map_count} != {expected_map_svg_count}"
+            )
 
 
 def reset_output_directory(output_directory: Path) -> None:
@@ -565,7 +905,9 @@ def reset_output_directory(output_directory: Path) -> None:
         Path(output_directory.anchor).resolve(),
     }
     if output_directory in protected or len(output_directory.parts) < 3:
-        raise ValueError(f"Refusing to replace unsafe output directory: {output_directory}")
+        raise ValueError(
+            f"Refusing to replace unsafe output directory: {output_directory}"
+        )
     if output_directory.exists():
         shutil.rmtree(output_directory)
     output_directory.mkdir(parents=True)
@@ -593,23 +935,47 @@ def build(arguments: argparse.Namespace) -> Path:
     print("Installing maps, OCR data, unknown icon, and notices", flush=True)
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
         maps_future = executor.submit(install_maps, data_directory)
+        map_catalog_future = executor.submit(load_map_catalog)
         unknown_future = executor.submit(install_unknown_icon, data_directory)
-        ocr_future = executor.submit(install_ocr_models, data_directory, arguments.workers)
-        notices_future = executor.submit(install_notices, data_directory, repository_root)
+        ocr_future = executor.submit(
+            install_ocr_models, data_directory, arguments.workers
+        )
+        notices_future = executor.submit(
+            install_notices, data_directory, repository_root
+        )
+
+        maps_entry, maps_document = maps_future.result()
         other_entries = [
-            maps_future.result(),
+            maps_entry,
             unknown_future.result(),
             *ocr_future.result(),
             *notices_future.result(),
         ]
 
-    # The interactive map SVGs and banner art have no stable public upstream, so
-    # they are carried forward from the tracked folders rather than downloaded.
-    print("Carrying forward tracked maps/ and banner/ assets", flush=True)
-    carried_entries = [
-        *install_carried_folder(data_directory, repository_root, "maps", ".svg"),
-        *install_carried_folder(data_directory, repository_root, "banner", ".png"),
-    ]
+    # Map SVGs are driven by maps.json: every interactive entry with an svgPath is
+    # fetched for the map id that artwork belongs to. Anything maps.json references
+    # but upstream will not serve falls back to the tracked maps/ folder.
+    map_catalog = map_catalog_future.result()
+    svg_targets = load_svg_targets(maps_document, map_catalog)
+    print(
+        f"Resolved {len(svg_targets)} map SVGs from maps.json svgPath values",
+        flush=True,
+    )
+    map_entries, map_notes = install_map_svgs(
+        data_directory,
+        svg_targets,
+        repository_root,
+        arguments.workers,
+    )
+
+    # Banners have no upstream source at all, so they stay tracked; only those with
+    # a matching map id in this bundle are copied in.
+    map_ids = {
+        entry["path"].removeprefix("maps/").removesuffix(".svg")
+        for entry in map_entries
+    }
+    banner_entries = install_banners(data_directory, repository_root, map_ids)
+    carried_entries = [*map_entries, *banner_entries]
 
     print(
         f"Generating {len(items)} icons from "
@@ -626,6 +992,7 @@ def build(arguments: argparse.Namespace) -> Path:
         icon_entries=icon_entries,
         other_entries=other_entries,
         carried_entries=carried_entries,
+        map_notes=map_notes,
         skipped_items=skipped_items,
     )
     archive_path = release_directory / "Data.zip"
@@ -634,12 +1001,14 @@ def build(arguments: argparse.Namespace) -> Path:
     archive_digest = sha256_bytes(archive_path.read_bytes())
     checksum = f"{archive_digest}  Data.zip\n".encode("ascii")
     write_bytes_atomic(release_directory / "Data.zip.sha256", checksum)
-    validate_output(data_directory, archive_path, len(items))
+    validate_output(data_directory, archive_path, len(items), len(map_entries))
 
     print(
         "Build complete: "
         f"{len(items)} icons ({len(skipped_items)} placeholders skipped), "
-        f"{len(carried_entries)} carried map assets, "
+        f"{manifest['mapSvgCount']} map SVGs "
+        f"({manifest['mapSvgDownloadedCount']} from maps.json), "
+        f"{manifest['bannerCount']} banners, "
         f"content {manifest['contentSha256']}, "
         f"archive {archive_digest}",
         flush=True,

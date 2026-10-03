@@ -5,8 +5,8 @@ Automated release builder for the runtime data consumed by
 
 This repository intentionally does **not** track generated item images, OCR models or
 map metadata. Its workflow downloads authoritative upstream inputs, validates them,
-converts transparent item base images into the PNG format RatEye expects, carries the
-map artwork forward, and publishes the result as a single `Data.zip` release asset.
+converts transparent item base images into the PNG format RatEye expects, resolves map
+artwork from `maps.json`, and publishes the result as a single `Data.zip` release asset.
 
 Catalog entries that still point at tarkov.dev's generic unknown-item placeholder are
 recorded in the manifest and omitted from template matching. Publishing the same
@@ -20,26 +20,46 @@ placeholder under many item ids would create ambiguous, incorrect scan results.
 - `unknown.png` — generated from the tarkov.dev unknown-item base image;
 - `maps.json` — from the maintained tarkov.dev web application;
 - `traineddata/*.traineddata` — from `tesseract-ocr/tessdata_fast`;
-- `maps/{map-id}.svg` — copied forward from `maps/` in this repository;
+- `maps/{map-id}.svg` — downloaded from the `svgPath` of each interactive `maps.json` entry;
 - `banner/{map-id}.png` and `banner/default.png` — copied forward from `banner/`;
 - `manifest.json` and `THIRD_PARTY_NOTICES.md` — provenance and checksums.
 
-## Why `maps/` and `banner/` are tracked
+## Map artwork is driven by `maps.json`
 
-`icons/`, `traineddata/`, `maps.json` and `unknown.png` have stable upstream sources
-and are therefore rebuilt from scratch on every run.
+Map SVGs are no longer carried forward wholesale. On each build the builder walks
+`maps.json`, and for every entry with `projection: "interactive"` and an `svgPath` it
+downloads that artwork and stores it as `maps/{map-id}.svg`.
 
-The interactive map SVGs and the per-map banner art have **no** stable public
-upstream endpoint:
+The filename is the tarkov.dev **map id** for the artwork, which is resolved by
+matching the entry's `normalizedName` against the map catalog
+(`https://json.tarkov.dev/regular/maps`). An exact match wins; otherwise the shortest
+longer name sharing the prefix is used, because `maps.json` has one entry per artwork
+while the catalog has a separate map per variant — `ground-zero` is the artwork behind
+`ground-zero`, `ground-zero-21` and `ground-zero-tutorial`. This mirrors how RatScanner
+resolves maps at runtime, so the filenames keep matching the ids the client looks up.
 
-- tarkov.dev publishes map SVGs under `https://assets.tarkov.dev/maps/svg/{Name}.svg`,
-  but not every map has one, and those files are a lower-fidelity variant of the
-  artwork RatScanner ships.
-- No endpoint serves the banner PNGs at all.
+Consequences of driving off `maps.json`:
 
-Both folders are therefore kept in the repository and **copied forward** into
-`Data.zip` on every build, keyed by tarkov.dev map id. Refresh them by replacing the
-files and letting the next build pick them up — no code change required.
+- new maps appear automatically once `maps.json` references them;
+- SVG artwork is refreshed whenever tarkov.dev updates it, with no commit needed.
+
+## Why `banner/` is still tracked
+
+`banner/{map-id}.png` has **no** public upstream endpoint — nothing serves the per-map
+banner art — so `banner/` remains tracked and copied forward verbatim. Only banners
+whose map id is present in the bundle are copied, which keeps the banner/SVG pairing
+intact as `maps.json` changes. `banner/default.png` is the shared fallback for maps with
+no art of their own and is always required.
+
+`maps/` also stays tracked, but only as a **fallback**: a tracked SVG is used when
+`maps.json` references a map whose artwork upstream will not serve, or when a map id
+RatScanner exposes is no longer referenced by `maps.json`. The Labyrinth, Icebreaker
+and Transits maps are in this category today. Every such file is listed under
+`mapNotes` in the manifest with the reason it was used, and a build that cannot produce
+at least eight map SVGs fails rather than shipping an incomplete map set.
+
+To refresh the carried artwork, replace the files in `maps/` or `banner/` and the next
+build picks them up — no code change required.
 
 ## Build locally
 
@@ -71,15 +91,15 @@ users to retain the existing single-request `Data.zip` setup.
 
 ## Source endpoints
 
-| Data              | Source                                                                      |
-| ----------------- | --------------------------------------------------------------------------- |
-| Item catalog      | `https://json.tarkov.dev/regular/items`                                     |
-| Item base images  | Item `baseImageLink` values hosted on `assets.tarkov.dev`                    |
-| Map catalog       | `https://json.tarkov.dev/regular/maps`                                       |
-| Interactive maps  | `the-hideout/tarkov-dev/src/data/maps.json`                                  |
-| OCR models        | `tesseract-ocr/tessdata_fast` release `4.1.0`                                |
-| Map SVGs          | this repository (`maps/`), carried forward                                   |
-| Map banners       | this repository (`banner/`), carried forward                                 |
+| Data             | Source                                                         |
+| ---------------- | -------------------------------------------------------------- |
+| Item catalog     | `https://json.tarkov.dev/regular/items`                        |
+| Item base images | Item `baseImageLink` values hosted on `assets.tarkov.dev`      |
+| Map catalog      | `https://json.tarkov.dev/regular/maps`                         |
+| Interactive maps | `the-hideout/tarkov-dev/src/data/maps.json`                    |
+| OCR models       | `tesseract-ocr/tessdata_fast` release `4.1.0`                  |
+| Map SVGs         | `svgPath` values in `maps.json`, hosted on `assets.tarkov.dev` |
+| Map banners      | this repository (`banner/`), carried forward                   |
 
 ## Licensing
 

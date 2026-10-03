@@ -35,8 +35,15 @@ The `traineddata/*.traineddata` files are taken unmodified from
 release `4.1.0`, which is licensed under the Apache License 2.0. The license text is
 bundled into `Data.zip` as `licenses/tessdata-Apache-2.0.txt`.
 
-## Map SVG and banner carry-forward
+## Map SVG and banner sources
 
-`maps/{mapId}.svg` and `banner/{mapId}.png` are tracked in this repository and
-copied into the bundle unchanged. They are keyed by tarkov.dev map id and are
-refreshed by hand when upstream artwork changes; see the repository README.
+`maps/{mapId}.svg` is downloaded on each build from the `svgPath` that `maps.json`
+records for the matching interactive map entry, and `banner/{mapId}.png` is copied
+forward from the tracked `banner/` folder because no public endpoint serves the
+per-map banner art. Both are keyed by tarkov.dev map id.
+
+Artwork that `maps.json` references but upstream does not serve — and any tracked
+`maps/` file for a map id `maps.json` no longer references — is copied forward from
+this repository instead. Each such file is listed under `mapNotes` in the generated
+`manifest.json` with the reason it was used, and is refreshed by hand when upstream
+artwork changes.
