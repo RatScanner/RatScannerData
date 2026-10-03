@@ -1,0 +1,18 @@
+# Build output
+/build/
+
+# Python
+/.venv/
+__pycache__/
+*.py[cod]
+
+# Generated data — rebuilt from upstream on every release run
+/icons/
+/traineddata/
+/maps.json
+/unknown.png
+
+# Editors
+/.idea/
+/.ruff_cache/
+/.vscode/
