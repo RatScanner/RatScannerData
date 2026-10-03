@@ -66,9 +66,7 @@ def validate_map_svg(name: str, content: bytes) -> None:
         raise ValueError(f"Map SVG has an empty viewBox: {name}")
 
 
-def validate_maps_json_svg_paths(
-    archive: zipfile.ZipFile, map_names: list[str]
-) -> None:
+def validate_maps_json_svg_paths(archive: zipfile.ZipFile, map_names: list[str]) -> None:
     """Every SVG in the bundle must correspond to a map id maps.json can serve.
 
     The reverse is not required: a map id can be bundled for a variant that shares
@@ -124,13 +122,9 @@ def validate_archive(path: str, minimum_icons: int) -> None:
 
         icon_names = sorted(name for name in names if SAFE_ICON.fullmatch(name))
         if len(icon_names) < minimum_icons:
-            raise ValueError(
-                f"Only {len(icon_names)} icons; expected at least {minimum_icons}"
-            )
+            raise ValueError(f"Only {len(icon_names)} icons; expected at least {minimum_icons}")
         unexpected_icon_entries = [
-            name
-            for name in names
-            if name.startswith("icons/") and not SAFE_ICON.fullmatch(name)
+            name for name in names if name.startswith("icons/") and not SAFE_ICON.fullmatch(name)
         ]
         if unexpected_icon_entries:
             raise ValueError(f"Unexpected icon paths: {unexpected_icon_entries[:5]}")
@@ -140,9 +134,7 @@ def validate_archive(path: str, minimum_icons: int) -> None:
         map_names = sorted(name for name in names if name.startswith("maps/"))
         if not map_names:
             raise ValueError("No map SVGs were carried into the archive")
-        unexpected_map_entries = [
-            name for name in map_names if not SAFE_MAP_SVG.fullmatch(name)
-        ]
+        unexpected_map_entries = [name for name in map_names if not SAFE_MAP_SVG.fullmatch(name)]
         if unexpected_map_entries:
             raise ValueError(f"Unexpected map SVG paths: {unexpected_map_entries[:5]}")
         for name in map_names:
@@ -155,9 +147,7 @@ def validate_archive(path: str, minimum_icons: int) -> None:
             name for name in banner_names if not SAFE_BANNER.fullmatch(name)
         ]
         if unexpected_banner_entries:
-            raise ValueError(
-                f"Unexpected banner paths: {unexpected_banner_entries[:5]}"
-            )
+            raise ValueError(f"Unexpected banner paths: {unexpected_banner_entries[:5]}")
         for name in banner_names:
             if not archive.read(name).startswith(PNG_SIGNATURE):
                 raise ValueError(f"Banner is not PNG: {name}")

@@ -38,21 +38,13 @@ SVG_NAMESPACE = "http://www.w3.org/2000/svg"
 
 CATALOG_URL = "https://json.tarkov.dev/regular/items"
 MAP_CATALOG_URL = "https://json.tarkov.dev/regular/maps"
-MAPS_URL = (
-    "https://raw.githubusercontent.com/the-hideout/tarkov-dev/main/src/data/maps.json"
-)
-TARKOV_DEV_LICENSE_URL = (
-    "https://raw.githubusercontent.com/the-hideout/tarkov-dev/main/LICENSE"
-)
+MAPS_URL = "https://raw.githubusercontent.com/the-hideout/tarkov-dev/main/src/data/maps.json"
+TARKOV_DEV_LICENSE_URL = "https://raw.githubusercontent.com/the-hideout/tarkov-dev/main/LICENSE"
 TESSDATA_REF = "4.1.0"
-TESSDATA_BASE_URL = (
-    f"https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/{TESSDATA_REF}"
-)
+TESSDATA_BASE_URL = f"https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/{TESSDATA_REF}"
 TESSDATA_LICENSE_URL = f"{TESSDATA_BASE_URL}/LICENSE"
 UNKNOWN_IMAGE_URL = "https://assets.tarkov.dev/unknown-item-base-image.webp"
-USER_AGENT = (
-    "RatScannerDataBuilder/1.0 (+https://github.com/TarkovTracker-org/RatScannerData)"
-)
+USER_AGENT = "RatScannerDataBuilder/1.0 (+https://github.com/TarkovTracker-org/RatScannerData)"
 
 SAFE_ITEM_ID = re.compile(r"^[A-Za-z0-9_-]+$")
 # Map ids are 24-character hex strings; both carried folders are keyed by them.
@@ -129,9 +121,7 @@ def fetch_bytes(
                 raise
             retry_after = error.headers.get("Retry-After")
             delay = (
-                float(retry_after)
-                if retry_after and retry_after.isdigit()
-                else 2 ** (attempt - 1)
+                float(retry_after) if retry_after and retry_after.isdigit() else 2 ** (attempt - 1)
             )
         except (TimeoutError, urllib.error.URLError):
             if attempt == attempts:
@@ -182,9 +172,7 @@ def load_catalog(
             raise ValueError(f"Item {item_id} has no baseImageLink")
         image_host = urllib.parse.urlparse(image_url).hostname
         if image_host != "assets.tarkov.dev":
-            raise ValueError(
-                f"Item {item_id} has an unexpected image host: {image_host}"
-            )
+            raise ValueError(f"Item {item_id} has an unexpected image host: {image_host}")
 
         seen_ids.add(item_id)
         if image_url == UNKNOWN_IMAGE_URL:
@@ -371,9 +359,7 @@ def install_ocr_models(data_directory: Path, workers: int) -> list[dict[str, Any
         content = fetch_bytes(source_url)
         if len(content) < 100_000:
             raise ValueError(f"OCR model is unexpectedly small: {source_url}")
-        write_bytes_atomic(
-            traineddata_directory / f"{output_code}.traineddata", content
-        )
+        write_bytes_atomic(traineddata_directory / f"{output_code}.traineddata", content)
         return {
             "path": f"traineddata/{output_code}.traineddata",
             "sha256": sha256_bytes(content),
@@ -435,8 +421,7 @@ def resolve_map_ids(map_catalog: dict[str, dict[str, Any]]) -> dict[str, str]:
         candidates = [
             name
             for name in map_catalog
-            if name.startswith(normalized_name)
-            and len(normalized_name) >= MIN_PREFIX_LENGTH
+            if name.startswith(normalized_name) and len(normalized_name) >= MIN_PREFIX_LENGTH
         ]
         if candidates:
             shortest = min(candidates, key=lambda name: (len(name), name))
@@ -523,9 +508,7 @@ def validate_svg(content: bytes, source: str) -> None:
     try:
         view_width, view_height = float(parts[2]), float(parts[3])
     except ValueError as error:
-        raise ValueError(
-            f"SVG from {source} has a non-numeric viewBox: {view_box}"
-        ) from error
+        raise ValueError(f"SVG from {source} has a non-numeric viewBox: {view_box}") from error
     if view_width <= 0 or view_height <= 0:
         raise ValueError(f"SVG from {source} has an empty viewBox: {view_box}")
 
@@ -534,9 +517,7 @@ def download_svg(target: dict[str, str], destination: Path) -> dict[str, Any]:
     source_url = target["svgPath"]
     parsed = urllib.parse.urlparse(source_url)
     if parsed.scheme != "https" or parsed.hostname != "assets.tarkov.dev":
-        raise ValueError(
-            f"Unexpected SVG host for {target['normalizedName']}: {source_url}"
-        )
+        raise ValueError(f"Unexpected SVG host for {target['normalizedName']}: {source_url}")
 
     content = fetch_bytes(source_url, accept="image/svg+xml,image/*")
     validate_svg(content, source_url)
@@ -580,9 +561,7 @@ def install_map_svgs(
                 target = futures[future]
                 try:
                     entries.append(future.result())
-                except (
-                    Exception
-                ) as error:  # noqa: BLE001 - fall back to the tracked copy
+                except Exception as error:  # noqa: BLE001 - fall back to the tracked copy
                     failures.append(
                         {
                             "mapId": target["mapId"],
@@ -715,9 +694,7 @@ def install_banners(
     return entries
 
 
-def install_notices(
-    data_directory: Path, repository_root: Path
-) -> list[dict[str, Any]]:
+def install_notices(data_directory: Path, repository_root: Path) -> list[dict[str, Any]]:
     notice_source = repository_root / "THIRD_PARTY_NOTICES.md"
     notice_content = notice_source.read_bytes()
     write_bytes_atomic(data_directory / notice_source.name, notice_content)
@@ -783,12 +760,8 @@ def write_manifest(
     source_counts = Counter(entry["source"] for entry in icon_entries)
     # Counted by top-level folder so the manifest reports "maps" and "banner"
     # separately, independent of how each entry's source is spelled.
-    carried_counts = Counter(
-        entry["path"].split("/", 1)[0] for entry in carried_entries
-    )
-    map_entries = [
-        entry for entry in carried_entries if entry["path"].startswith("maps/")
-    ]
+    carried_counts = Counter(entry["path"].split("/", 1)[0] for entry in carried_entries)
+    map_entries = [entry for entry in carried_entries if entry["path"].startswith("maps/")]
     manifest = {
         "schemaVersion": 1,
         "contentSha256": content_digest(content_entries),
@@ -797,19 +770,13 @@ def write_manifest(
         "iconCount": len(icon_entries),
         "skippedItemCount": len(skipped_items),
         "uniqueIconSourceCount": len(source_counts),
-        "sharedIconSourceGroupCount": sum(
-            count > 1 for count in source_counts.values()
-        ),
+        "sharedIconSourceGroupCount": sum(count > 1 for count in source_counts.values()),
         "slotDimensionMismatchCount": sum(
             not entry["slotDimensionsMatch"] for entry in icon_entries
         ),
         "mapSvgCount": len(map_entries),
-        "mapSvgDownloadedCount": sum(
-            "carriedReason" not in entry for entry in map_entries
-        ),
-        "bannerCount": sum(
-            entry["path"].startswith("banner/") for entry in carried_entries
-        ),
+        "mapSvgDownloadedCount": sum("carriedReason" not in entry for entry in map_entries),
+        "bannerCount": sum(entry["path"].startswith("banner/") for entry in carried_entries),
         "fileCount": len(content_entries),
         "sources": {
             "catalog": catalog_url,
@@ -861,15 +828,11 @@ def validate_output(
 
     icon_count = len(list((data_directory / "icons").glob("*.png")))
     if icon_count != expected_icon_count:
-        raise ValueError(
-            f"Expected {expected_icon_count} icons but generated {icon_count}"
-        )
+        raise ValueError(f"Expected {expected_icon_count} icons but generated {icon_count}")
 
     map_svg_count = len(list((data_directory / "maps").glob("*.svg")))
     if map_svg_count != expected_map_svg_count:
-        raise ValueError(
-            f"Expected {expected_map_svg_count} map SVGs but produced {map_svg_count}"
-        )
+        raise ValueError(f"Expected {expected_map_svg_count} map SVGs but produced {map_svg_count}")
 
     with zipfile.ZipFile(archive_path, "r") as archive:
         invalid_file = archive.testzip()
@@ -905,9 +868,7 @@ def reset_output_directory(output_directory: Path) -> None:
         Path(output_directory.anchor).resolve(),
     }
     if output_directory in protected or len(output_directory.parts) < 3:
-        raise ValueError(
-            f"Refusing to replace unsafe output directory: {output_directory}"
-        )
+        raise ValueError(f"Refusing to replace unsafe output directory: {output_directory}")
     if output_directory.exists():
         shutil.rmtree(output_directory)
     output_directory.mkdir(parents=True)
@@ -937,12 +898,8 @@ def build(arguments: argparse.Namespace) -> Path:
         maps_future = executor.submit(install_maps, data_directory)
         map_catalog_future = executor.submit(load_map_catalog)
         unknown_future = executor.submit(install_unknown_icon, data_directory)
-        ocr_future = executor.submit(
-            install_ocr_models, data_directory, arguments.workers
-        )
-        notices_future = executor.submit(
-            install_notices, data_directory, repository_root
-        )
+        ocr_future = executor.submit(install_ocr_models, data_directory, arguments.workers)
+        notices_future = executor.submit(install_notices, data_directory, repository_root)
 
         maps_entry, maps_document = maps_future.result()
         other_entries = [
@@ -970,10 +927,7 @@ def build(arguments: argparse.Namespace) -> Path:
 
     # Banners have no upstream source at all, so they stay tracked; only those with
     # a matching map id in this bundle are copied in.
-    map_ids = {
-        entry["path"].removeprefix("maps/").removesuffix(".svg")
-        for entry in map_entries
-    }
+    map_ids = {entry["path"].removeprefix("maps/").removesuffix(".svg") for entry in map_entries}
     banner_entries = install_banners(data_directory, repository_root, map_ids)
     carried_entries = [*map_entries, *banner_entries]
 
