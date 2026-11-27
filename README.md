@@ -63,7 +63,7 @@ build picks them up — no code change required.
 
 ## Build locally
 
-Requires Python 3.10 or later.
+Requires Python 3.11 or later.
 
 ```powershell
 python -m venv .venv
