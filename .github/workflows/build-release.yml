@@ -59,6 +59,7 @@ jobs:
           ruff check scripts
           ruff format --check scripts
           python -m compileall -q scripts
+          python -m unittest discover -s scripts -p 'test_*.py' -q
 
       - name: Build Data.zip
         run: python scripts/build_data.py
