@@ -132,6 +132,8 @@ class BundleTests(unittest.TestCase):
                 self.assertEqual(icon["renderedSlots"], {"width": 2, "height": 3})
                 self.assertEqual(icon["declaredSlots"], {"width": 2, "height": 3})
                 self.assertTrue(icon["slotDimensionsMatch"])
+                with Image.open(io.BytesIO(bundle.read(icon["path"]))) as rendered:
+                    self.assertEqual(rendered.size, (127, 190))
                 for entry in bundle.infolist():
                     self.assertEqual(entry.date_time, (1980, 1, 1, 0, 0, 0))
             self.assertEqual(build_data.build(arguments).read_bytes(), first)
