@@ -45,6 +45,9 @@ TESSDATA_BASE_URL = f"https://raw.githubusercontent.com/tesseract-ocr/tessdata_f
 TESSDATA_LICENSE_URL = f"{TESSDATA_BASE_URL}/LICENSE"
 UNKNOWN_IMAGE_URL = "https://assets.tarkov.dev/unknown-item-base-image.webp"
 USER_AGENT = "RatScannerDataBuilder/1.0 (+https://github.com/TarkovTracker-org/RatScannerData)"
+ALLOWED_SOURCE_HOSTS = frozenset(
+    {"assets.tarkov.dev", "json.tarkov.dev", "raw.githubusercontent.com"}
+)
 
 SAFE_ITEM_ID = re.compile(r"^[A-Za-z0-9_-]+$")
 # Map ids are 24-character hex strings; both carried folders are keyed by them.
@@ -94,6 +97,21 @@ def sha256_bytes(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
+def require_allowed_source(url: str) -> None:
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.scheme != "https" or parsed.hostname not in ALLOWED_SOURCE_HOSTS:
+        raise ValueError(f"Only HTTPS sources on allowed hosts are permitted: {url}")
+
+
+class SourceRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        require_allowed_source(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+SOURCE_OPENER = urllib.request.build_opener(SourceRedirectHandler())
+
+
 def fetch_bytes(
     url: str,
     *,
@@ -103,9 +121,7 @@ def fetch_bytes(
 ) -> bytes:
     """Download a URL with bounded retry/backoff for transient failures."""
 
-    parsed = urllib.parse.urlparse(url)
-    if parsed.scheme != "https":
-        raise ValueError(f"Only HTTPS sources are allowed: {url}")
+    require_allowed_source(url)
 
     request = urllib.request.Request(
         url,
@@ -113,7 +129,7 @@ def fetch_bytes(
     )
     for attempt in range(1, attempts + 1):
         try:
-            with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            with SOURCE_OPENER.open(request, timeout=timeout_seconds) as response:
                 return response.read()
         except urllib.error.HTTPError as error:
             retryable = error.code == 429 or 500 <= error.code < 600
@@ -981,7 +997,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--catalog-url",
         default=CATALOG_URL,
-        help="tarkov.dev item catalog URL",
+        help="Item catalog URL on an allowed HTTPS source host",
     )
     parser.add_argument(
         "--workers",
